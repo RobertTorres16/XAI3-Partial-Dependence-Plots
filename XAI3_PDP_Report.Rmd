@@ -1,0 +1,328 @@
+---
+title: "Model-Agnostic Interpretability: Partial Dependence Plots"
+author: "Robert Torres Mingarro, Joel Porcar Sales, Maria Porta Molina"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  include = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 8,
+  fig.height = 5,
+  out.width = "100%"
+)
+```
+
+\newpage
+
+# 1. Introduction
+
+In the previous report, we explored **interpretable models** (logistic regression, decision trees and RuleFit) whose internal structure can be directly inspected to understand how they arrive at a prediction. While interpretable models offer full transparency, they are often limited in predictive capacity compared to more complex learners such as random forests, gradient-boosted machines or neural networks. When a practitioner chooses one of these more powerful models, the question of explanation does not disappear; it simply shifts from inspecting the model's internal parameters to probing its behaviour from the outside.
+
+**Model-agnostic** interpretability methods address this challenge. Rather than relying on a model's internal structure, they analyse the relationship between inputs and outputs by systematically varying the feature values and observing how the predictions change. Because these methods treat the model as a black box, they can be applied to any supervised learning algorithm, making them a versatile tool in the interpretability toolkit.
+
+The **Partial Dependence Plot (PDP)**, introduced by Friedman (2001), is one of the most widely used model-agnostic methods. A PDP shows the **marginal effect** of one or two features on the predicted outcome of a previously fitted model. By averaging out the influence of all other features, the PDP isolates the relationship between the feature(s) of interest and the prediction, revealing whether it is linear, monotonic, or more complex.
+
+Formally, the partial dependence function for a feature set $x_s$ is defined as:
+
+$$\hat{f}_s(x_s) = E_{x_c}\left[\hat{f}(x_s, x_c)\right] = \int \hat{f}(x_s, x_c) \, dP(x_c)$$
+
+where $x_c$ denotes all features not in $x_s$. In practice, this expectation is estimated by averaging over the training data:
+
+$$\hat{f}_s(x_s) = \frac{1}{n} \sum_{i=1}^{n} \hat{f}(x_s, x_c^{(i)})$$
+
+This report applies PDP analysis to the Capital-Bikeshare dataset, using a **Random Forest** as the underlying predictive model. We first generate one-dimensional PDPs for four key features (days since 2011, temperature, humidity and wind speed), then produce a two-dimensional PDP combining humidity and temperature to explore their joint effect on predicted bike rental demand.
+
+```{r libraries}
+library(dplyr)
+library(ggplot2)
+library(randomForest)
+library(pdp)
+library(gridExtra)
+library(scales)
+library(grid)
+```
+
+\newpage
+
+# 2. One-Dimensional Partial Dependence Plot
+
+## 2.1 Context and Motivation
+
+The partial dependence plot shows the marginal effect of a feature on the predicted outcome of a previously fit model. By systematically varying one feature while averaging over the remaining features, the PDP reveals the functional form of the learned relationship; whether it is linear, monotonic, threshold-based, or more complex without requiring access to the model's internal parameters.
+
+In this section, we apply the one-dimensional PDP to a **Random Forest** model trained on the Capital-Bikeshare dataset to predict daily bike rental volume (`cnt`). The Random Forest is chosen as the underlying model because it is a powerful, non-parametric learner capable of capturing complex non-linearities and interactions without explicit feature engineering. However, unlike the interpretable models in the previous report, its internal structure (an ensemble of hundreds of decision trees) is too complex to inspect directly. This is precisely the scenario where model-agnostic methods such as PDP become essential.
+
+We visualise the marginal effects of four key features: **days since 2011** (temporal trend), **temperature**, **humidity** and **wind speed**. These features were selected because they represent both temporal and meteorological drivers of cycling demand, and because they span different types of relationships (monotonic, non-linear, threshold-based).
+
+## 2.2 Data Preparation
+
+We load the Capital-Bikeshare daily dataset and apply the same feature engineering pipeline used in the previous report. Variables are denormalised to their original units to facilitate interpretation.
+
+```{r data-load}
+day <- read.csv("day.csv", stringsAsFactors = FALSE)
+cat("Dataset dimensions:", nrow(day), "rows x", ncol(day), "columns\n")
+```
+
+```{r feature-engineering}
+day <- day %>%
+  mutate(
+    dteday = as.Date(dteday),
+
+    # One-hot encoding for season (reference = season 1, winter)
+    s2 = ifelse(season == 2, 1, 0),   # Spring
+    s3 = ifelse(season == 3, 1, 0),   # Summer
+    s4 = ifelse(season == 4, 1, 0),   # Autumn
+
+    # Binary meteorological variables derived from weathersit
+    MISTY = ifelse(weathersit == 2, 1, 0),
+    RAIN  = ifelse(weathersit %in% c(3, 4), 1, 0),
+
+    # Denormalisation: recovering original units
+    temp      = temp * (39 + 8) - 8,     # degrees C
+    hum       = hum * 100,               # percentage (max = 100)
+    windspeed = windspeed * 67,           # km/h (max = 67)
+
+    # Temporal trend: days elapsed since 1 January 2011
+    days_since_2011 = as.integer(dteday - as.Date("2011-01-01"))
+  )
+
+features <- c("workingday", "holiday", "s2", "s3", "s4",
+              "MISTY", "RAIN", "temp", "hum", "windspeed", "days_since_2011")
+
+cat("Model features:", paste(features, collapse = ", "), "\n")
+```
+
+With the feature set defined, we fit a **Random Forest** regression model with 500 trees to predict the daily number of bike rentals (`cnt`). The Random Forest is a non-parametric ensemble learner that aggregates the predictions of many individual decision trees, each trained on a bootstrap sample of the data with a random subset of features considered at each split. This procedure reduces variance and produces a model that can capture complex non-linearities and high-order interactions without explicit feature engineering. The trade-off is interpretability: the resulting ensemble of hundreds of trees cannot be inspected directly, which is precisely the gap that the PDP analysis in the following sections is designed to fill.
+
+```{r rf-fit}
+# Build the formula with all features
+rf_formula <- as.formula(paste("cnt ~", paste(features, collapse = " + ")))
+
+# Fit the Random Forest model
+set.seed(42)
+rf_model <- randomForest(rf_formula,
+                          data = day,
+                          ntree = 500,
+                          importance = TRUE)
+
+cat("Model type:", class(rf_model), "\n")
+cat("Number of trees:", rf_model$ntree, "\n")
+cat("% Variance explained:", round(rf_model$rsq[length(rf_model$rsq)] * 100, 2), "%\n")
+```
+
+\newpage
+
+## 2.3 PDP Computation and Visualisation
+
+The one-dimensional PDP visualises the marginal relationship between a single feature and the predicted outcome. For each unique value of the feature of interest, the model is used to predict the outcome for every observation in the dataset (with the feature of interest fixed at that value and all other features at their original values), and the predictions are averaged. The resulting curve shows how the predicted outcome changes as the feature varies across its range, with all other features integrated out.
+
+```{r pdp-1d-compute}
+# Compute partial dependence for each feature
+pdp_days <- partial(rf_model, pred.var = "days_since_2011", grid.resolution = 50)
+pdp_temp <- partial(rf_model, pred.var = "temp", grid.resolution = 50)
+pdp_hum  <- partial(rf_model, pred.var = "hum", grid.resolution = 50)
+pdp_wind <- partial(rf_model, pred.var = "windspeed", grid.resolution = 50)
+```
+
+```{r pdp-1d-plots, include=TRUE, fig.width=10, fig.height=8, fig.cap="Partial Dependence Plots for the four features of interest. Each plot shows the marginal effect of the feature on the predicted number of daily bike rentals, with all other features averaged out."}
+# Helper function for consistent styling
+pdp_plot <- function(pdp_data, x_var, x_lab, title) {
+  ggplot(pdp_data, aes_string(x = x_var, y = "yhat")) +
+    geom_line(color = "#378ADD", linewidth = 1.2) +
+    labs(
+      x = x_lab,
+      y = "Predicted bike rentals",
+      title = title
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 12)
+    )
+}
+
+p1 <- pdp_plot(pdp_days, "days_since_2011", "Days since 2011-01-01", "Days since 2011")
+p2 <- pdp_plot(pdp_temp, "temp", "Temperature (°C)", "Temperature")
+p3 <- pdp_plot(pdp_hum, "hum", "Humidity (%)", "Humidity")
+p4 <- pdp_plot(pdp_wind, "windspeed", "Wind speed (km/h)", "Wind speed")
+
+grid.arrange(p1, p2, p3, p4, ncol = 2, nrow = 2)
+```
+
+\newpage
+
+## 2.4 Interpretation
+
+The partial dependence plots reveal how each feature marginally influences the predicted bike rentals:
+
+The temporal trend (days since 2011) shows a multi-phase growth. Predicted rentals climb from about 3,000 to 4,000 during the first few months, plateau until day 400, and then rise steeply again to peak near 5,700 rentals before slightly dipping. This reflects the initial adoption of the service followed by a secondary expansion phase.
+
+Temperature follows an S-shaped curve, with demand steadily increasing from cold conditions until it saturates around 20°C (reaching ~5,200 rentals). The curve remains flat until 28°C, after which extreme heat begins to cause a mild decline in rentals.
+
+Humidity exhibits a clear threshold effect. Below 60%, humidity has almost no impact on predicted rentals, remaining steady around 4,700. Above 60%, the curve drops sharply and linearly down to 3,500 rentals, indicating that muggy or likely rainy conditions severely suppress demand.
+
+Wind speed shows a roughly linear, monotonically decreasing relationship. Rentals drop steadily from 4,700 at near-zero wind down to 4,000 at 30 km/h. While the total reduction is more moderate compared to temperature or humidity, high winds consistently act as a secondary deterrent to cycling.
+
+\newpage
+
+# 3. Two-Dimensional Partial Dependence Plot
+
+## 3.1 Context and Motivation
+
+While one-dimensional PDPs reveal the marginal effect of individual features, they cannot capture **interaction effects** between two features. If two features interact, meaning that the effect of one depends on the value of the other, the 1D PDPs will show only the average marginal effect, potentially masking important conditional relationships. The two-dimensional PDP addresses this limitation by computing the partial dependence function for two features simultaneously, producing a surface (or heatmap) that reveals how the predicted outcome varies across the joint feature space.
+
+In this section, we generate a 2D PDP for **humidity** and **temperature**, the two most influential meteorological features identified in the previous section. We will explore their joint effect on predicted bike rental demand to determine whether the suppressive effect of high humidity is modulated by temperature (or vice versa).
+
+## 3.2 Methodology
+
+For each combination of values on a grid spanning both features, the model predicts the outcome for every observation in the dataset (with the two features of interest fixed and all other features at their original values), and the predictions are averaged. Due to the computational cost of evaluating the model across a dense 2D grid for all 731 observations, we extract a random subsample of **50 observations** from the dataset. It is important to note that the subsample is used **only for computing the partial dependence values** (i.e., the observations over which the predictions are averaged), not for retraining the model. The Random Forest model remains the one fitted on the full dataset in Section 2.2.
+
+The visualisation follows the approach shown in the class slides: a **tile plot** (heatmap) with marginal **density distributions** displayed along both axes to show the distribution of the input features. This provides important context: regions of the heatmap where data is sparse should be interpreted with caution, as the partial dependence estimates in those regions are based on extrapolation into potentially unrealistic feature combinations.
+
+\newpage
+
+```{r pdp-2d-compute}
+# Extract a random subsample of 50 observations for PDP computation
+# The model (rf_model) was trained on the full dataset; only the averaging
+# step in the PDP is performed over this subsample to reduce computation time.
+set.seed(42)
+day_sample <- day[sample(nrow(day), 50), ]
+
+# Compute the 2D partial dependence using the full-data model
+# but averaging predictions over the 50-observation subsample
+pdp_2d <- partial(rf_model,
+                   pred.var = c("temp", "hum"),
+                   grid.resolution = 30,
+                   train = day_sample)
+```
+## 3.3 PDP Computation and Visualisation
+
+```{r pdp-2d-plot, include=TRUE, fig.width=8, fig.height=6, fig.cap="Two-dimensional Partial Dependence Plot of temperature and humidity. The heatmap shows the predicted number of daily bike rentals for each combination of temperature and humidity, with all other features averaged out."}
+ggplot(pdp_2d, aes(x = temp, y = hum)) +
+  geom_tile(aes(fill = yhat), width = 2.5, height = 4) +
+  geom_rug(data = day_sample, inherit.aes = FALSE, aes(x = temp, y = hum), alpha = 0.5, sides = "bl") +
+  scale_fill_viridis_c(
+    name = "Predicted\nbike rentals",
+    option = "inferno"
+  ) +
+  labs(
+    x = "Temperature (°C)",
+    y = "Humidity (%)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "right"
+  )
+```
+
+## 3.4 Interpretation
+
+The 2D PDP reveals the joint effect of temperature and humidity on predicted bike rental demand, exposing an interaction that the 1D PDPs could not fully capture.
+
+The highest predicted bike rentals (bright/warm colours in the heatmap) are concentrated in the region where temperature is moderate to warm (approximately 15–30°C) and humidity is low to moderate (below 60%). This confirms that the optimal conditions for cycling are warm but not excessively hot days with comfortable humidity levels.
+
+As humidity increases beyond 60–70%, predicted demand drops sharply regardless of the temperature, visible as a transition to cooler colours in the upper portion of the heatmap. Importantly, this suppression effect appears to be stronger at intermediate temperatures (15–25°C) than at extreme temperatures, where demand is already low. On warm days, when demand would otherwise be high, high humidity has a larger absolute impact because there is more demand to suppress.
+
+At low temperatures (below approximately 10°C), predicted demand is uniformly low across all humidity levels. The heatmap shows consistently dark colours in the left portion, indicating that cold weather dominates over humidity in determining demand.
+
+For fleet management, this identifies the specific meteorological conditions under which demand peaks: warm days (15–25°C) with moderate humidity (30–60%). On such days, maximum fleet availability is warranted, whereas on cold or very humid days, reduced fleet deployment represents a more efficient allocation of resources.
+
+\newpage
+
+# 4. PDP to Explain House Prices
+
+## 4.1 Context and Motivation
+
+In this section, we apply the Partial Dependence Plot to a new problem: explaining the price of a house using the `kc_house_data.csv` dataset. We will train a Random Forest model to predict the `price` based on six features: `bedrooms`, `bathrooms`, `sqft_living`, `sqft_lot`, `floors`, and `yr_built`. 
+
+Following the training, we will use one-dimensional PDPs to visualize the relationships the model has learned for `bedrooms`, `bathrooms`, `sqft_living`, and `floors`. Due to the large size of the dataset, we will extract a random sample before computing the partial dependence to ensure computational efficiency.
+
+## 4.2 Data Preparation and PDP Visualisation
+
+First, we load the dataset and select the relevant features. 
+
+```{r house-data-load}
+house_data <- read.csv("kc_house_data.csv", stringsAsFactors = FALSE)
+
+# Select relevant features and the target
+house_features <- c("bedrooms", "bathrooms", "sqft_living", "sqft_lot", "floors", "yr_built")
+house_df <- house_data %>% dplyr::select(all_of(c("price", house_features)))
+house_df <- na.omit(house_df)
+```
+
+We extract a random subsample of 1,500 observations from the full dataset. This subsample is used both to train the Random Forest model and to compute the partial dependence functions, following the recommended approach for large datasets.
+
+```{r house-rf-fit}
+set.seed(42)
+house_sample <- house_df[sample(nrow(house_df), 1500), ]
+
+house_rf_formula <- as.formula(paste("price ~", paste(house_features, collapse = " + ")))
+
+house_rf_model <- randomForest(house_rf_formula,
+                               data = house_sample,
+                               ntree = 100,
+                               importance = TRUE)
+```
+
+Given the size of the dataset (over 21,000 rows), computing the PDP over the entire dataset is computationally expensive. We extract a subset of 500 random samples to compute the partial dependence functions efficiently.
+
+\newpage
+
+```{r house-pdp-compute}
+set.seed(42)
+# Extract a subset of 500 random samples for the PDP computation
+house_sample <- house_df[sample(nrow(house_df), 500), ]
+
+# Compute 1D PDPs using the trained model and the same subsample for averaging
+pdp_bed   <- partial(house_rf_model, pred.var = "bedrooms",    train = house_sample, grid.resolution = 30)
+pdp_bath  <- partial(house_rf_model, pred.var = "bathrooms",   train = house_sample, grid.resolution = 30)
+pdp_sqft  <- partial(house_rf_model, pred.var = "sqft_living", train = house_sample, grid.resolution = 30)
+pdp_floor <- partial(house_rf_model, pred.var = "floors",      train = house_sample, grid.resolution = 10)
+```
+
+```{r house-pdp-plots, include=TRUE, fig.width=10, fig.height=8, fig.cap="1D Partial Dependence Plots for the house price prediction. The plots show the marginal effect of bedrooms, bathrooms, living area, and floors on the predicted house price."}
+h1 <- pdp_plot(pdp_bed,  "bedrooms",    "Bedrooms",         "Bedrooms")    + scale_y_continuous(labels = comma) + ylab("Predicted price ($)")
+h2 <- pdp_plot(pdp_bath, "bathrooms",   "Bathrooms",        "Bathrooms")   + scale_y_continuous(labels = comma) + ylab("Predicted price ($)")
+h3 <- pdp_plot(pdp_sqft, "sqft_living", "Living Area (sqft)","Living Area") + scale_y_continuous(labels = comma) + ylab("Predicted price ($)")
+h4 <- pdp_plot(pdp_floor,"floors",      "Floors",           "Floors")      + scale_y_continuous(labels = comma) + ylab("Predicted price ($)")
+
+grid.arrange(h1, h2, h3, h4, ncol = 2, nrow = 2)
+```
+
+## 4.3 Interpretation
+
+The partial dependence plots reveal how each feature marginally influences the predicted house price:
+
+The number of bedrooms shows a counter-intuitive negative relationship with predicted price. The highest predicted price is associated with single-bedroom homes (~$640,000), dropping sharply to ~$540,000 at two bedrooms, and continuing a steady decline until flattening out at six or more bedrooms (~$480,000). This likely reflects a confounding effect where high-end urban apartments or very large properties are masking the standalone value of bedroom counts.
+
+Bathrooms exhibit a strong, step-wise positive relationship. Predicted prices sit around $500,000 for 1 to 2.5 bathrooms, then spike dramatically at 3 bathrooms to $750,000. The price continues to climb steadily, reaching its peak of over $900,000 for houses with 5 or more bathrooms, indicating this feature is a major proxy for property value and size.
+
+Living area (sqft_living) shows the most direct and consistent positive relationship. Prices rise steeply from around $400,000 for 1,000 sqft homes up to roughly $1,200,000 for 4,500 sqft homes, where the curve plateaus. This confirms that total living area is the primary continuous driver of house pricing.
+
+The number of floors has a more erratic, moderate impact. Prices hover around $530,000 for 1-2 floors, with a sudden climb starting at 2 floors up to a peak of $570,000 for 3 floors. The total variation (~$40,000) is much smaller than the other features, indicating floors are a secondary predictor.
+
+\newpage
+
+# 5. Conclusions
+
+This report has demonstrated the application of **Partial Dependence Plots (PDP)**, a model-agnostic interpretability technique, to Random Forest models predicting daily bike rental demand in the Capital-Bikeshare system and house prices in King County.
+
+The **one-dimensional PDPs** for the bike rental model revealed clear, interpretable relationships between individual features and predicted demand, showing strong temporal trends, non-linear temperature comfort zones, and threshold effects for humidity. The **two-dimensional PDP** further revealed a joint interaction where the suppressive effect of high humidity is most pronounced on warm days. 
+
+Furthermore, we applied the methodology to a **house pricing dataset**, which highlighted that living area and the number of bathrooms are the primary drivers of predicted house prices, demonstrating the versatility of the PDP approach across completely different domains.
+
+## 5.1 Advantages and Limitations of PDP
+
+The PDP approach offers a fundamentally different type of explanation compared to inherently interpretable models. Rather than inspecting the model's internal structure, we probe its behaviour from the outside.
+
+The main **advantages** of PDPs include their intuitive visual interpretation, making complex relationships accessible to non-technical stakeholders. They provide a global perspective of a feature's average influence across the entire dataset, and being model-agnostic, they can be applied to any black-box algorithm like the Random Forests used here.
+
+However, PDPs have notable **limitations**. The most critical is the assumption of independence between the feature of interest and the remaining features. When strong correlations exist (e.g., bedrooms and living area), the PDP averages over unrealistic synthetic observations, potentially distorting the true marginal effect. Additionally, PDPs are restricted to low dimensions (1D or 2D) and show only the *average* marginal effect, which can mask heterogeneous responses across different subgroups of the data.
