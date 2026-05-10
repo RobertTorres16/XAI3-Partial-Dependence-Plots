@@ -18,7 +18,7 @@ While highly accurate, non-parametric machine learning models like Random Forest
 The project applies PDP methodology to two distinct real-world predictive modeling scenarios:
 
 ### 1. Bike Rental Demand Forecasting
-A Random Forest model is trained on the [Capital-Bikeshare dataset](https://archive.ics.uci.edu/ml/datasets/Bike+Sharing+Dataset) (`day.csv`) to predict daily bike rental volume. The analysis includes:
+A Random Forest model is trained on the Capital-Bikeshare dataset (`day.csv`) to predict daily bike rental volume. The analysis includes:
 - **1D Partial Dependence**: Evaluating four key drivers of demand:
   - **Temporal Trend (Days since 2011)**: Capturing service growth and adoption phases.
   - **Temperature**: Identifying the optimal, non-linear thermal comfort zone.
@@ -27,7 +27,7 @@ A Random Forest model is trained on the [Capital-Bikeshare dataset](https://arch
 - **2D Partial Dependence**: Generating a joint heatmap for temperature and humidity, which reveals a critical interaction: high humidity suppresses demand most severely on warm days when baseline demand would otherwise be at its peak.
 
 ### 2. House Price Prediction
-To demonstrate the versatility of the approach across domains, the methodology is applied to the [King County house sales dataset](https://www.kaggle.com/harlfoxem/housesalespredictions) (`kc_house_data.csv`). A second Random Forest model predicts property values, and 1D PDPs are utilized to isolate the marginal pricing impacts of `bedrooms`, `bathrooms`, `sqft_living`, and `floors`.
+To demonstrate the versatility of the approach across domains, the methodology is applied to the King County house sales dataset (`kc_house_data.csv`). A second Random Forest model predicts property values, and 1D PDPs are utilized to isolate the marginal pricing impacts of `bedrooms`, `bathrooms`, `sqft_living`, and `floors`.
 
 ---
 
