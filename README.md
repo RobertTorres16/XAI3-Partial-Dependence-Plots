@@ -1,32 +1,33 @@
 # XAI3 — Partial Dependence Plots
 
-**Course:** Educational Data Mining (EDM) — Universitat Politècnica de València  
+**Course:** Evaluación, Despliegue y Monitorización de Modelos (EDM) — Universitat Politècnica de València  
 **Authors:** Robert Torres Mingarro, Joel Porcar Sales, Maria Porta Molina  
 
 ---
 
-## Overview
+## Project Overview
 
-This repository contains the third XAI (Explainable Artificial Intelligence) assignment, focused on **model-agnostic interpretability** using **Partial Dependence Plots (PDP)**.
+This repository presents a comprehensive analysis of **model-agnostic interpretability** techniques, specifically focusing on **Partial Dependence Plots (PDP)**.
 
-PDPs show the marginal effect of one or two features on the predicted outcome of a previously fitted model. By averaging out the influence of all other features, they isolate the learned relationship between the feature(s) of interest and the model's predictions.
+While highly accurate, non-parametric machine learning models like Random Forests are often considered "black boxes" due to their complex internal structures. PDPs address this limitation by showing the marginal effect of one or two features on the predicted outcome. By averaging out the influence of all other features, PDPs isolate the learned relationship between the features of interest and the model's predictions, enabling robust, global interpretation.
 
 ---
 
-## Exercises
+## Analysis Scope
 
-### Exercise 1 — 1D PDP: Bike Rental Demand
-A Random Forest model is trained on the [Capital-Bikeshare dataset](https://archive.ics.uci.edu/ml/datasets/Bike+Sharing+Dataset) (`day.csv`) to predict daily bike rentals. One-dimensional PDPs are computed for four key features:
-- **Days since 2011** — captures temporal growth and adoption trends
-- **Temperature** — reveals an S-shaped comfort-zone effect
-- **Humidity** — shows a threshold effect above ~60%
-- **Wind speed** — demonstrates a roughly linear negative relationship
+The project applies PDP methodology to two distinct real-world predictive modeling scenarios:
 
-### Exercise 2 — 2D PDP: Joint Effect of Temperature and Humidity
-A two-dimensional PDP is generated for temperature and humidity, revealing their joint interaction on predicted bike demand. High humidity suppresses demand most strongly on warm days, an interaction not visible in the 1D plots.
+### 1. Bike Rental Demand Forecasting
+A Random Forest model is trained on the [Capital-Bikeshare dataset](https://archive.ics.uci.edu/ml/datasets/Bike+Sharing+Dataset) (`day.csv`) to predict daily bike rental volume. The analysis includes:
+- **1D Partial Dependence**: Evaluating four key drivers of demand:
+  - **Temporal Trend (Days since 2011)**: Capturing service growth and adoption phases.
+  - **Temperature**: Identifying the optimal, non-linear thermal comfort zone.
+  - **Humidity**: Revealing a strict threshold effect above 60% humidity.
+  - **Wind Speed**: Demonstrating a continuous, linear negative impact.
+- **2D Partial Dependence**: Generating a joint heatmap for temperature and humidity, which reveals a critical interaction: high humidity suppresses demand most severely on warm days when baseline demand would otherwise be at its peak.
 
-### Exercise 3 — 1D PDP: House Price Prediction
-The same methodology is applied to the [King County house sales dataset](https://www.kaggle.com/harlfoxem/housesalespredictions) (`kc_house_data.csv`). A Random Forest predicts house prices, and PDPs are computed for `bedrooms`, `bathrooms`, `sqft_living`, and `floors`.
+### 2. House Price Prediction
+To demonstrate the versatility of the approach across domains, the methodology is applied to the [King County house sales dataset](https://www.kaggle.com/harlfoxem/housesalespredictions) (`kc_house_data.csv`). A second Random Forest model predicts property values, and 1D PDPs are utilized to isolate the marginal pricing impacts of `bedrooms`, `bathrooms`, `sqft_living`, and `floors`.
 
 ---
 
